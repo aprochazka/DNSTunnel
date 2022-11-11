@@ -12,6 +12,17 @@
 #define DST_FILE "data.txt"
 #define MAX_PACKET_SIZE 255
 
+/*
+TODO:
+volani funkci z knihoven
+argumenty
+otevre soubor
+posle se nazev a cestu 
+posle se content - chunksize
+poslochat odpovedi (jen svoje) a kdyztak poslat znova stejnej chunk
+stdin pokun neni filepath
+*/
+
 // update like in https://www.w3schools.in/c-programming/examples/reverse-a-string-in-c
 char *strrev(char *str)
 {
@@ -35,14 +46,11 @@ void transformBaseHost(char *src, char **dst)
     int transformedIndex = 0;
     int charCount = 0;
 
-    transformed[transformedIndex] = '0';
-    transformedIndex++;
-
     for (int i = srcLen - 1; i >= 0; i--)
     {
         if (src[i] == '.')
         {
-            transformed[transformedIndex] = charCount + '0';
+            transformed[transformedIndex] = (char)charCount;//charCount + '0';
             charCount = 0;
         }
         else
@@ -53,7 +61,7 @@ void transformBaseHost(char *src, char **dst)
         transformedIndex++;
     };
 
-    transformed[transformedIndex] = charCount + '0';
+    transformed[transformedIndex] = (char)charCount;
 
     *dst = malloc(strlen(transformed) + 1 * sizeof(char));
     strcpy(*dst, transformed);
@@ -79,20 +87,15 @@ void encode(char *src, char **dst)
 
 int main(int argc, char *argv[])
 {
-
-    char *host = BASE_HOST;
-    char *dst;
-
-    encode(host, &dst);
-    printf("%s", dst);
-
-    unsigned char packet[564]; // packet should have maximally 512 Bytes
-    unsigned char *packetPointer = packet;
+    char packet[564]; // packet should have maximally 512 Bytes
+    char *packetPointer = packet;
     memset(packetPointer, 0, sizeof(packet));
 
     // FILL HEADER
     struct dnsHeader *header = (struct dnsHeader *)packetPointer; // MOZNA CHYBI VYPRCANT
-    header->id = (uint16_t)333;                                   // TODO change to random id
+    header->id = htons(1);                          // TODO change to random id
+    
+    /*
     header->qr = 0;
     header->opcode = 0; // 0 for standart querry
     header->aa = 0;
@@ -101,6 +104,9 @@ int main(int argc, char *argv[])
     header->ra = 0;
     header->z = 0;
     header->rcode = 0;
+    */
+
+    header->flags =  htons(0b0000000100000000);
     header->qdcount = htons(1);
     header->ancount = 0;
     header->nscount = 0;
@@ -110,18 +116,27 @@ int main(int argc, char *argv[])
     packetPointer += sizeof(struct dnsHeader); // move pointer
 
     // MANUALLY INSERT QNAME
-    char *baseHost = BASE_HOST;
-    char *dummyData = "3www3abc7example3com0";
-    // strcat(dummyData, baseHost);
+    char *dummyData;
+    
+    char *srcDummyData = ".example.com";//"3www3abc7example3com0";
+    char *dummyDataRaw = "abcdefghijklmnopqrstuvwxyz";
+    char *allocSrcDummy = malloc(strlen(srcDummyData)*sizeof(char) + strlen(dummyDataRaw)*sizeof(char) + 2);
+    char *encodedDummy;
+    encode(dummyDataRaw, &encodedDummy);
+    strcpy(allocSrcDummy, encodedDummy);
+    strcat(allocSrcDummy, srcDummyData);
+    transformBaseHost(allocSrcDummy, &dummyData);
+    printf("%s\n", dummyData);
+    printf("%s\n", encodedDummy);
 
     memcpy(packetPointer, dummyData, strlen(dummyData));
 
-    packetPointer += strlen(dummyData);
+    packetPointer += (strlen(dummyData)*sizeof(char))+1;
 
     struct dnsQuestion *question = (struct dnsQuestion *)packetPointer;
 
     question->QType = htons(1);
-    question->QType = htons(1);
+    question->QClass = htons(1);
 
     packetPointer += sizeof(struct dnsQuestion);
 

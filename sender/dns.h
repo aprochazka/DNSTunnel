@@ -20,21 +20,23 @@
 */
 struct dnsHeader
 {
-    uint16_t id;
+    short id;
 
-    unsigned int qr : 1;
+    /*
+    char qr : 1;
 
-    unsigned int opcode : 4;
+    char opcode : 4;
 
-    unsigned int aa : 1;
-    unsigned int tc : 1;
-    unsigned int rd : 1;
-    unsigned int ra : 1;
+    char aa : 1;
+    char tc : 1;
+    char rd : 1;
+    char ra : 1;
 
-    unsigned int z : 3;
+    char z : 3;
 
-    unsigned int rcode : 4;
-
+    char rcode : 4;
+    */
+    short flags;
     uint16_t qdcount;
     uint16_t ancount;
     uint16_t nscount;
@@ -59,3 +61,26 @@ struct dnsQuestion
     uint16_t QType;
     uint16_t QClass;
 };
+
+/*
+0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|                                               |
+|                                               |
+|                      NAME                     |
+|                                               |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|                      TYPE                     |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|                     CLASS                     |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|                      TTL                      |
+|                                               |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|                   RDLENGTH                    |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--|
+|                     RDATA                     |
+|                                               |
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*/
+
