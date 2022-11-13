@@ -1,2 +1,2 @@
 all:
-	gcc -o main sender.c -I . dns_sender_events.h dns.h
+	gcc -o main sender.c -Wextra -Wall

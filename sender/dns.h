@@ -1,6 +1,16 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#define IP_ADDR "172.31.80.1"
+#define PORT 8000
+#define BASE_HOST "example.com"
+#define SRC_FILE "./data.txt"
+#define DST_FILE "data.txt"
+#define MAX_DATA_SIZE 255
+#define MAX_CHUNK_SIZE 64
+#define NAME_PACKET_ID 1
+#define END_PACKET_ID 0
+
 // https://amriunix.com/post/deep-dive-into-dns-messages/
 /*
  0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
@@ -43,6 +53,14 @@ struct dnsHeader
     uint16_t arcount;
 };
 
+struct dnsHeaderWithoutId
+{
+    short flags;
+    uint16_t qdcount;
+    uint16_t ancount;
+    uint16_t nscount;
+    uint16_t arcount;
+};
 /*
  0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
@@ -84,3 +102,13 @@ struct dnsQuestion
 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 */
 
+struct dnsResponse
+{
+    uint8_t ans_type;
+    uint8_t name_offset;
+    uint16_t type;
+    uint16_t qclass;
+    uint32_t ttl;
+    uint16_t rdlength;
+    uint32_t rdata;
+};
