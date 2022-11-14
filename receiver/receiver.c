@@ -9,12 +9,70 @@
 #include "string.h"
 #include "arpa/inet.h"
 #include "sys/socket.h"
+#include "receiver.h"
+#include "sys/stat.h"
+#include "errno.h"
 
-////////
-///////
-//////	ZKOPIROVANY FONKCE ZE SENDERU, PAK PREDELAT DO EXTERNIHO SOUBORU
-//////
-///////
+#define PATH_MAX 255
+
+int mkdir_p(const char *pathname)
+{
+	char *tok = NULL;
+	char path[PATH_MAX + 1] = {0};
+	char tmp[PATH_MAX + 1] = {0};
+	struct stat st = {0};
+	char *pathNameCropped = malloc(strlen(pathname) + 1);
+	strcpy(pathNameCropped, pathname);
+
+	/* remove filename from path */
+	int i = strlen(pathNameCropped) - 1;
+	for (; pathNameCropped[i] != '/' && i > 0; i--)
+		pathNameCropped[i] = (char)0;
+	pathNameCropped[i] = (char)0;
+
+	/* pathname already exists and is a directory */
+	if (stat(pathNameCropped, &st) == 0 && S_ISDIR(st.st_mode))
+		return 0;
+
+	/* doesn't need parent directories created */
+	if (mkdir(pathNameCropped, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == 0)
+		return 0;
+
+	/* prepend initial / if needed */
+	if (pathNameCropped[0] == '/')
+		tmp[0] = '/';
+
+	/* prepend initial ./ if needed */
+	if (pathNameCropped[0] == '.' && pathNameCropped[1] == '/')
+	{
+		tmp[0] = '.';
+		tmp[1] = '/';
+	}
+
+	/* make a copy of pathname and start tokenizing it */
+	strncpy(path, pathNameCropped, PATH_MAX);
+	tok = strtok(path, "/");
+
+	/* keep going until there are no tokens left */
+	while (tok)
+	{
+		/* append the next token to the path */
+		strcat(tmp, tok);
+
+		/* create the directory and keep going unless mkdir fails and
+		 * errno doesn't indicate that the path already exists */
+		errno = 0;
+
+		mkdir(tmp, S_IRWXU | S_IRWXG | S_IRWXO | S_IROTH | S_IXOTH);
+
+		/* append a / to the path for the next token and get it */
+		strcat(tmp, "/");
+		tok = strtok(NULL, "/");
+	}
+
+	/* success */
+	return 0;
+}
 
 void prepareResponse(char *srcPacket, short id)
 {
@@ -27,14 +85,7 @@ void prepareResponse(char *srcPacket, short id)
 	header->arcount = 0;
 }
 
-////////
-///////
-//////	ZKOPIROVANY FONKCE ZE SENDERU, PAK PREDELAT DO EXTERNIHO SOUBORU
-//////
-///////
-
 /*
-vytvor slozkovou strukturu
 poslouchej dal pro dalsi soubor
 predelat dekodovani
 */
@@ -79,7 +130,6 @@ size_t hexs2bin(const char *hex, unsigned char **out)
 	len /= 2;
 
 	*out = malloc(len);
-	// memset(*out, 'A', len);
 	for (i = 0; i < len; i++)
 	{
 		if (!hexchr2bin(hex[i * 2], &b1) || !hexchr2bin(hex[i * 2 + 1], &b2))
@@ -184,10 +234,29 @@ int getChunks(char *src, char *dst)
 	return dstIndex;
 }
 
-int main()
+int parseArguments(struct args *arguments, int argc, char *argv[])
 {
-	// argument simulation
-	char *baseHost = BASE_HOST;
+	arguments->BASE_HOST = NULL;
+	arguments->DST_FILEPATH = NULL;
+	if (argc != 3)
+	{
+		return 0;
+	}
+	arguments->BASE_HOST = malloc(strlen(argv[1]) * sizeof(char) + 1);
+	strcpy(arguments->BASE_HOST, argv[1]);
+	arguments->DST_FILEPATH = malloc(strlen(argv[2]) * sizeof(char) + 1);
+	strcpy(arguments->DST_FILEPATH, argv[2]);
+	return 1;
+}
+
+int main(int argc, char *argv[])
+{
+	struct args *arguments = malloc(sizeof(struct args));
+	if (parseArguments(arguments, argc, argv) != 1)
+	{
+		printf("wrong number of arguments\n");
+		return 1;
+	}
 
 	int fd;
 	char receivedData[1000];
@@ -214,22 +283,36 @@ int main()
 		char *receivedDataPointer = receivedData;
 		receivedDataPointer += sizeof(struct dnsHeader);
 		uint64_t packetIndex = 1;
-		if (recognizePacket(receivedDataPointer, baseHost) != 0)
+		if (recognizePacket(receivedDataPointer, arguments->BASE_HOST) != 0)
+		{
 			continue;
+		}
 		if (isPacketStartEnd(receivedDataPointer) != 1)
+		{
 			continue;
+		}
 
 		unsigned char *fileName;
 		char *nameEncodedBuffer = malloc(MAX_DATA_SIZE + 2);
 		getChunks(receivedDataPointer, nameEncodedBuffer);
 		hexs2bin(nameEncodedBuffer, &fileName);
 
-		FILE *fp = fopen((char *)fileName, "w+");
+		//
+		// OPEN FILE
+		//
+		char *pathToFile = malloc(strlen(arguments->DST_FILEPATH) + strlen((char *)fileName));
+		strcpy(pathToFile, arguments->DST_FILEPATH);
+		strcat(pathToFile, "/");
+		strcat(pathToFile, (char *)fileName);
+
+		mkdir_p(pathToFile);
+		FILE *fp = fopen((char *)pathToFile, "w+");
 		if (fp == NULL)
 		{
-			printf("failed to open file: %s\n", (char *)fileName);
+			printf("failed to open file: %s\n", (char *)pathToFile);
 			continue;
 		}
+		// OPEN FILE END
 
 		prepareResponse(receivedDataPointer, packetIndex);
 		packetIndex++;
@@ -238,6 +321,11 @@ int main()
 
 		while ((n = recvfrom(fd, receivedData, 1000, 0, (struct sockaddr *)&client, &length)) >= 0)
 		{
+			if (recognizePacket(receivedDataPointer, arguments->BASE_HOST) != 0)
+			{
+				continue;
+			}
+
 			if (isPacketStartEnd(receivedDataPointer) == -1)
 				break;
 			char *encodedBuffer = malloc(MAX_DATA_SIZE + 2);

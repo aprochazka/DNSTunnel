@@ -4,22 +4,19 @@
 #include "dns.h"
 #include "arpa/inet.h"
 #include "sys/socket.h"
-
+#include "sender.h"
 /*
 TODO:
 volani funkci z knihoven
 argumenty
-otevre soubor
-posle se nazev a cestu
-posle se content - chunksize
 poslochat odpovedi (jen svoje) a kdyztak poslat znova stejnej chunk
 stdin pokun neni filepath
 */
 
 // update like in https://www.w3schools.in/c-programming/examples/reverse-a-string-in-c
-unsigned char *strrev(unsigned char *str, int strSize)
+uint8_t *strrev(uint8_t *str, int strSize)
 {
-    unsigned char *p1, *p2;
+    uint8_t *p1, *p2;
 
     if (!str || !*str)
         return str;
@@ -32,10 +29,10 @@ unsigned char *strrev(unsigned char *str, int strSize)
     return str;
 }
 
-void transformBaseHost(unsigned char *src, unsigned char **dst, int dataLen)
+void transformBaseHost(uint8_t *src, uint8_t **dst, int dataLen)
 {
     uint16_t srcLen = dataLen;
-    unsigned char transformed[MAX_DATA_SIZE] = {0};
+    uint8_t transformed[MAX_DATA_SIZE] = {0};
     int transformedIndex = 0;
     int charCount = 0;
 
@@ -43,7 +40,7 @@ void transformBaseHost(unsigned char *src, unsigned char **dst, int dataLen)
     {
         if (src[i] == '.')
         {
-            transformed[transformedIndex] = (unsigned char)charCount;
+            transformed[transformedIndex] = (uint8_t)charCount;
             charCount = 0;
         }
         else
@@ -54,17 +51,17 @@ void transformBaseHost(unsigned char *src, unsigned char **dst, int dataLen)
         transformedIndex++;
     };
 
-    transformed[transformedIndex] = (unsigned char)charCount;
+    transformed[transformedIndex] = (uint8_t)charCount;
 
     memcpy(*dst, transformed, transformedIndex + 1);
     strrev(*dst, transformedIndex + 1);
 };
 
-int encode(unsigned char *src, unsigned char **dst, int dataLen)
+int encode(uint8_t *src, uint8_t **dst, int dataLen)
 {
     size_t i;
     uint16_t srcLen = dataLen;
-    unsigned char *tmpDst = malloc(srcLen * 2 + 1);
+    uint8_t *tmpDst = malloc(srcLen * 2 + 1);
     for (i = 0; i < srcLen; i++)
     {
         tmpDst[i * 2] = "0123456789ABCDEF"[src[i] >> 4];
@@ -98,11 +95,11 @@ void fillHeader(struct dnsHeader **header, uint16_t idx)
     (*header)->arcount = 0;
 }
 
-int chunkEncodedData(unsigned char *src, unsigned char **dst, int srcLen)
+int chunkEncodedData(uint8_t *src, uint8_t **dst, int srcLen)
 {
     int srcIndex = 0;
     int currentIndex = 0;
-    unsigned char *chunkedBuffer = malloc(MAX_DATA_SIZE * sizeof(unsigned char));
+    uint8_t *chunkedBuffer = malloc(MAX_DATA_SIZE * sizeof(uint8_t));
     int chunkCounter = 0;
     while (srcIndex < srcLen - 1)
     {
@@ -129,11 +126,11 @@ int chunkEncodedData(unsigned char *src, unsigned char **dst, int srcLen)
     return chunkedSize;
 }
 
-int fillPacketData(unsigned char *host, unsigned char *rawData, unsigned char **dstPointer, int dataLen)
+int fillPacketData(char *host, uint8_t *rawData, uint8_t **dstPointer, int dataLen)
 {
-    unsigned char *tmpData = malloc(MAX_DATA_SIZE * sizeof(unsigned char) * 2);
-    unsigned char *encoded = malloc(MAX_DATA_SIZE * sizeof(unsigned char) * 2);
-    unsigned char *encodedFormatted = malloc(MAX_DATA_SIZE * sizeof(unsigned char) * 2);
+    uint8_t *tmpData = malloc(MAX_DATA_SIZE * sizeof(uint8_t) * 2);
+    uint8_t *encoded = malloc(MAX_DATA_SIZE * sizeof(uint8_t) * 2);
+    uint8_t *encodedFormatted = malloc(MAX_DATA_SIZE * sizeof(uint8_t) * 2);
 
     int encodedSize = encode(rawData, &encoded, dataLen);
 
@@ -148,21 +145,21 @@ int fillPacketData(unsigned char *host, unsigned char *rawData, unsigned char **
     return completeDataSize + 2; //+2 first and last number byte
 }
 
-void packetFromData(unsigned char *host, unsigned char *data, unsigned char **dstPacket, uint16_t idx, int dataLen)
+void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx, int dataLen)
 {
     struct dnsHeader *header = (struct dnsHeader *)*dstPacket;
     fillHeader(&header, idx);
 
     *dstPacket += sizeof(struct dnsHeader);
 
-    unsigned char QNameData[256]; // packet should have maximally 512 Bytes
-    unsigned char *QNamePointer = QNameData;
+    uint8_t QNameData[256]; // packet should have maximally 512 Bytes
+    uint8_t *QNamePointer = QNameData;
     memset(QNamePointer, 0, sizeof(QNameData));
     int QNameLen = fillPacketData(host, data, &QNamePointer, dataLen);
 
     memcpy(*dstPacket, QNamePointer, QNameLen);
 
-    *dstPacket += (QNameLen * sizeof(unsigned char));
+    *dstPacket += (QNameLen * sizeof(uint8_t));
 
     struct dnsQuestion *question = (struct dnsQuestion *)*dstPacket;
 
@@ -172,12 +169,59 @@ void packetFromData(unsigned char *host, unsigned char *data, unsigned char **ds
     *dstPacket += sizeof(struct dnsQuestion);
 }
 
-int main()
+void fillArguments(struct args *arguments, int argc, char *argv[])
 {
-    // SIMULATE ARGUMENTS
-    unsigned char *dummyFileName = "./video.mp4";
-    unsigned char *srcDummyData = "example.com";
+    arguments->UPSTREAM_DNS_IP = NULL;
+    arguments->BASE_HOST = NULL;
+    arguments->DST_FILEPATH = NULL;
+    arguments->SRC_FILEPATH = NULL;
+    int baseArgCount = 0;
+    printf(" argc: %d\n", argc);
+    for (int i = 0; i < argc; i++)
+        printf(" argv[%d]: %s\n", i, argv[i]);
+    for (int currArg = 1; currArg < argc; currArg++)
+    {
+        printf(" examining: %s\n", argv[currArg]);
+        if (strcmp(argv[currArg], "-u") == 0)
+        {
+            printf("in If\n");
+            arguments->UPSTREAM_DNS_IP = malloc(strlen(argv[currArg + 1]) * sizeof(char) + 1);
+            strcpy(arguments->UPSTREAM_DNS_IP, argv[currArg + 1]);
+            currArg++;
+        }
+        else
+        {
+            switch (baseArgCount)
+            {
+            case 0:
+                printf("1\n");
+                arguments->BASE_HOST = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                strcpy(arguments->BASE_HOST, argv[currArg]);
+                break;
+            case 1:
+                printf("2\n");
+                arguments->DST_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                strcpy(arguments->DST_FILEPATH, argv[currArg]);
+                break;
+            case 2:
+                printf("3\n");
+                arguments->SRC_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                strcpy(arguments->SRC_FILEPATH, argv[currArg]);
+                break;
+            default:
+                break;
+            }
+            baseArgCount++;
+        }
+    }
+}
 
+int main(int argc, char *argv[])
+{
+
+    struct args *arguments = malloc(sizeof(struct args));
+    fillArguments(arguments, argc, argv);
+    printf("args - %s, %s, %s, %s\n", arguments->UPSTREAM_DNS_IP, arguments->BASE_HOST, arguments->DST_FILEPATH, arguments->SRC_FILEPATH);
     int sockfd;
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
@@ -191,26 +235,25 @@ int main()
     // Filling server information
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
-    servaddr.sin_addr.s_addr = INADDR_ANY;
+    servaddr.sin_addr.s_addr = inet_addr(arguments->UPSTREAM_DNS_IP);
 
-    int maxQNameSize = (int)(MAX_DATA_SIZE - strlen(srcDummyData) - 5) / 2;
-    unsigned char *rawDataToSend = malloc((maxQNameSize + 1) * sizeof(unsigned char));
+    int maxQNameSize = (int)(MAX_DATA_SIZE - strlen(arguments->BASE_HOST) - 5) / 2;
+    uint8_t *rawDataToSend = malloc((maxQNameSize + 1) * sizeof(uint8_t));
 
     int eof = 0;
     uint16_t packetCounter = 2;
-    FILE *fp = fopen(dummyFileName, "r");
+    FILE *fp = fopen(arguments->SRC_FILEPATH, "r");
 
     // TODO TO FUNCTION
-    unsigned char namePacket[514]; // packet should have maximally 512 Bytes
-    unsigned char *namePacketPointer = namePacket;
+    uint8_t namePacket[514]; // packet should have maximally 512 Bytes
+    uint8_t *namePacketPointer = namePacket;
 
     memset(namePacketPointer, 0, sizeof(namePacket));
 
-    packetFromData(srcDummyData, dummyFileName, &namePacketPointer, NAME_PACKET_ID, strlen(dummyFileName));
+    packetFromData(arguments->BASE_HOST, (uint8_t *)arguments->DST_FILEPATH, &namePacketPointer, NAME_PACKET_ID, strlen(arguments->DST_FILEPATH));
     size_t packetSize = namePacketPointer - namePacket;
 
-    unsigned char response[1024];
-    int num_received;
+    uint8_t response[1024];
     socklen_t socklen = sizeof(struct sockaddr_in);
 
     sendto(sockfd, namePacket, packetSize,
@@ -221,18 +264,18 @@ int main()
     while (!eof)
     {
 
-        num_received = recvfrom(sockfd, response, sizeof(response), MSG_WAITALL,
-                                (struct sockaddr *)&servaddr, &socklen);
+        recvfrom(sockfd, response, sizeof(response), MSG_WAITALL,
+                 (struct sockaddr *)&servaddr, &socklen);
 
-        unsigned char packet[514]; // packet should have maximally 512 Bytes
-        unsigned char *packetPointer = packet;
+        uint8_t packet[514]; // packet should have maximally 512 Bytes
+        uint8_t *packetPointer = packet;
 
         memset(packetPointer, 0, sizeof(packet));
         memset(rawDataToSend, 0, maxQNameSize + 1);
         int bytesRead = fread(rawDataToSend, 1, maxQNameSize, fp);
         if (bytesRead <= 0)
             break;
-        packetFromData(srcDummyData, rawDataToSend, &packetPointer, packetCounter, bytesRead);
+        packetFromData(arguments->BASE_HOST, rawDataToSend, &packetPointer, packetCounter, bytesRead);
 
         packetSize = packetPointer - packet;
 
@@ -245,12 +288,12 @@ int main()
     fclose(fp);
 
     // TODO TO FUNCTION SENDENDPACKET
-    unsigned char endPacket[514]; // packet should have maximally 512 Bytes
-    unsigned char *endPacketPointer = endPacket;
-    unsigned char *dummyEndCall = "neplecha ukoncena";
+    uint8_t endPacket[514]; // packet should have maximally 512 Bytes
+    uint8_t *endPacketPointer = endPacket;
+    char *dummyEndCall = "neplecha ukoncena";
     memset(endPacketPointer, 0, sizeof(endPacket));
 
-    packetFromData(srcDummyData, dummyEndCall, &endPacketPointer, END_PACKET_ID, strlen(dummyEndCall));
+    packetFromData(arguments->BASE_HOST, (uint8_t *)dummyEndCall, &endPacketPointer, END_PACKET_ID, strlen(dummyEndCall));
     packetSize = endPacketPointer - endPacket;
     sendto(sockfd, endPacket, packetSize,
            MSG_CONFIRM, (const struct sockaddr *)&servaddr,

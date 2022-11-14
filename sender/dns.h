@@ -2,10 +2,7 @@
 #include <sys/types.h>
 
 #define IP_ADDR "172.31.80.1"
-#define PORT 8000
-#define BASE_HOST "example.com"
-#define SRC_FILE "./data.txt"
-#define DST_FILE "data.txt"
+#define PORT 53
 #define MAX_DATA_SIZE 255
 #define MAX_CHUNK_SIZE 64
 #define NAME_PACKET_ID 1
