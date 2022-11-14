@@ -87,10 +87,6 @@ void prepareResponse(char *srcPacket, short id)
 	header->arcount = 0;
 }
 
-/*
-poslouchej dal pro dalsi soubor
-predelat dekodovani
-*/
 int hexchr2bin(const char hex, char *out)
 {
 	if (out == NULL)

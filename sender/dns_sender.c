@@ -7,14 +7,6 @@
 #include "sender.h"
 #include "dns_sender_events.h"
 
-/*
-TODO:
-volani funkci z knihoven
-argumenty
-poslochat odpovedi (jen svoje) a kdyztak poslat znova stejnej chunk
-stdin pokun neni filepath
-*/
-
 // update like in https://www.w3schools.in/c-programming/examples/reverse-a-string-in-c
 uint8_t *strrev(uint8_t *str, int strSize)
 {
@@ -77,19 +69,7 @@ int encode(uint8_t *src, uint8_t **dst, int dataLen)
 
 void fillHeader(struct dnsHeader **header, uint16_t idx)
 {
-    (*header)->id = htons(idx); // TODO change to random id
-
-    /*
-    (*header)->qr = 0;
-    (*header)->opcode = 0; // 0 for standart querry
-    (*header)->aa = 0;
-    (*header)->tc = 0;
-    (*header)->rd = 1;
-    (*header)->ra = 0;
-    (*header)->z = 0;
-    (*header)->rcode = 0;
-    */
-
+    (*header)->id = htons(idx);
     (*header)->flags = htons(0b0000000100000000);
     (*header)->qdcount = htons(1);
     (*header)->ancount = 0;
@@ -128,7 +108,7 @@ int chunkEncodedData(uint8_t *src, uint8_t **dst, int srcLen)
     return chunkedSize;
 }
 
-int fillPacketData(char *host, uint8_t *rawData, uint8_t **dstPointer, int dataLen)
+int fillPacketData(char *host, uint8_t *rawData, uint8_t **dstPointer, int dataLen, char *filePath, int chunkId)
 {
     uint8_t *tmpData = malloc(MAX_DATA_SIZE * sizeof(uint8_t) * 2);
     uint8_t *encoded = malloc(MAX_DATA_SIZE * sizeof(uint8_t) * 2);
@@ -143,8 +123,42 @@ int fillPacketData(char *host, uint8_t *rawData, uint8_t **dstPointer, int dataL
     memcpy(&tmpData[chunkedSize], host, strlen(host));
 
     int completeDataSize = chunkedSize + strlen(host);
+
+    dns_sender__on_chunk_encoded(filePath, chunkId, (char *)tmpData);
+
     transformBaseHost(tmpData, &(*dstPointer), completeDataSize);
     return completeDataSize + 2; //+2 first and last number byte
+}
+
+void getDefaultDNS(char **dst)
+{
+    FILE *fp = fopen("/etc/resolv.conf", "r");
+    if (fp == NULL)
+        return;
+
+    int found = 0;
+    char line[500];
+    char *token;
+    while (fgets(line, 500, fp))
+    {
+        token = strtok(line, " ");
+        while (token != NULL)
+        {
+            if (strcmp(token, "nameserver") == 0)
+            {
+                token = strtok(NULL, " ");
+                *dst = malloc((strlen(token)) * sizeof(char));
+                strcpy(*dst, token);
+                found = 1;
+                return;
+            }
+            token = strtok(NULL, " ");
+        }
+        if (found)
+            break;
+    }
+
+    return;
 }
 
 void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx, int dataLen, char *filePath)
@@ -157,10 +171,7 @@ void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx
     uint8_t QNameData[256]; // packet should have maximally 512 Bytes
     uint8_t *QNamePointer = QNameData;
     memset(QNamePointer, 0, sizeof(QNameData));
-    int QNameLen = fillPacketData(host, data, &QNamePointer, dataLen);
-
-    // ASSIGNMENT FUNCTION
-    dns_sender__on_chunk_encoded(filePath, idx, (char *)QNamePointer);
+    int QNameLen = fillPacketData(host, data, &QNamePointer, dataLen, filePath, idx);
 
     memcpy(*dstPacket, QNamePointer, QNameLen);
 
@@ -224,21 +235,31 @@ int main(int argc, char *argv[])
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
     {
-        perror("socket creation failed");
         exit(EXIT_FAILURE);
     }
 
     // Filling server information
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
-    servaddr.sin_addr.s_addr = inet_addr(arguments->UPSTREAM_DNS_IP);
+    if (arguments->UPSTREAM_DNS_IP == NULL)
+    {
+        char *defaultUpstream;
+        getDefaultDNS(&defaultUpstream);
+        servaddr.sin_addr.s_addr = inet_addr(defaultUpstream);
+    }
+    else
+    {
+        servaddr.sin_addr.s_addr = inet_addr(arguments->UPSTREAM_DNS_IP);
+    }
 
     int maxQNameSize = (int)(MAX_DATA_SIZE - strlen(arguments->BASE_HOST) - 5) / 2;
     uint8_t *rawDataToSend = malloc((maxQNameSize + 1) * sizeof(uint8_t));
 
     int eof = 0;
     uint16_t packetCounter = 2;
-    FILE *fp = fopen(arguments->SRC_FILEPATH, "r");
+    FILE *fp = NULL;
+    if (arguments->SRC_FILEPATH != NULL)
+        fp = fopen(arguments->SRC_FILEPATH, "r");
 
     // TODO TO FUNCTION
     uint8_t namePacket[514]; // packet should have maximally 512 Bytes
@@ -283,7 +304,15 @@ int main(int argc, char *argv[])
 
         memset(packetPointer, 0, sizeof(packet));
         memset(rawDataToSend, 0, maxQNameSize + 1);
-        int bytesRead = fread(rawDataToSend, 1, maxQNameSize, fp);
+        int bytesRead;
+        if (fp == NULL)
+        {
+            bytesRead = fread(rawDataToSend, 1, maxQNameSize, stdin);
+        }
+        else
+        {
+            bytesRead = fread(rawDataToSend, 1, maxQNameSize, fp);
+        }
 
         if (bytesRead <= 0)
             break;
@@ -302,15 +331,16 @@ int main(int argc, char *argv[])
                sizeof(servaddr));
         packetCounter++;
     }
-    fclose(fp);
+    if (fp != NULL)
+        fclose(fp);
 
     // TODO TO FUNCTION SENDENDPACKET
     uint8_t endPacket[514]; // packet should have maximally 512 Bytes
     uint8_t *endPacketPointer = endPacket;
-    char *dummyEndCall = "neplecha ukoncena";
+    char *endTransfer = "END OF TRANSFER";
     memset(endPacketPointer, 0, sizeof(endPacket));
 
-    packetFromData(arguments->BASE_HOST, (uint8_t *)dummyEndCall, &endPacketPointer, END_PACKET_ID, strlen(dummyEndCall), arguments->DST_FILEPATH);
+    packetFromData(arguments->BASE_HOST, (uint8_t *)endTransfer, &endPacketPointer, END_PACKET_ID, strlen(endTransfer), arguments->DST_FILEPATH);
     packetSize = endPacketPointer - endPacket;
 
     // ASSIGNMEN FUNCTION
