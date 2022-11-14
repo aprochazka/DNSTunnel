@@ -5,6 +5,8 @@
 #include "arpa/inet.h"
 #include "sys/socket.h"
 #include "sender.h"
+#include "dns_sender_events.h"
+
 /*
 TODO:
 volani funkci z knihoven
@@ -145,7 +147,7 @@ int fillPacketData(char *host, uint8_t *rawData, uint8_t **dstPointer, int dataL
     return completeDataSize + 2; //+2 first and last number byte
 }
 
-void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx, int dataLen)
+void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx, int dataLen, char *filePath)
 {
     struct dnsHeader *header = (struct dnsHeader *)*dstPacket;
     fillHeader(&header, idx);
@@ -156,6 +158,9 @@ void packetFromData(char *host, uint8_t *data, uint8_t **dstPacket, uint16_t idx
     uint8_t *QNamePointer = QNameData;
     memset(QNamePointer, 0, sizeof(QNameData));
     int QNameLen = fillPacketData(host, data, &QNamePointer, dataLen);
+
+    // ASSIGNMENT FUNCTION
+    dns_sender__on_chunk_encoded(filePath, idx, (char *)QNamePointer);
 
     memcpy(*dstPacket, QNamePointer, QNameLen);
 
@@ -176,52 +181,43 @@ void fillArguments(struct args *arguments, int argc, char *argv[])
     arguments->DST_FILEPATH = NULL;
     arguments->SRC_FILEPATH = NULL;
     int baseArgCount = 0;
-    printf(" argc: %d\n", argc);
     for (int i = 0; i < argc; i++)
-        printf(" argv[%d]: %s\n", i, argv[i]);
-    for (int currArg = 1; currArg < argc; currArg++)
-    {
-        printf(" examining: %s\n", argv[currArg]);
-        if (strcmp(argv[currArg], "-u") == 0)
+        for (int currArg = 1; currArg < argc; currArg++)
         {
-            printf("in If\n");
-            arguments->UPSTREAM_DNS_IP = malloc(strlen(argv[currArg + 1]) * sizeof(char) + 1);
-            strcpy(arguments->UPSTREAM_DNS_IP, argv[currArg + 1]);
-            currArg++;
-        }
-        else
-        {
-            switch (baseArgCount)
+            if (strcmp(argv[currArg], "-u") == 0)
             {
-            case 0:
-                printf("1\n");
-                arguments->BASE_HOST = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
-                strcpy(arguments->BASE_HOST, argv[currArg]);
-                break;
-            case 1:
-                printf("2\n");
-                arguments->DST_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
-                strcpy(arguments->DST_FILEPATH, argv[currArg]);
-                break;
-            case 2:
-                printf("3\n");
-                arguments->SRC_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
-                strcpy(arguments->SRC_FILEPATH, argv[currArg]);
-                break;
-            default:
-                break;
+                arguments->UPSTREAM_DNS_IP = malloc(strlen(argv[currArg + 1]) * sizeof(char) + 1);
+                strcpy(arguments->UPSTREAM_DNS_IP, argv[currArg + 1]);
+                currArg++;
             }
-            baseArgCount++;
+            else
+            {
+                switch (baseArgCount)
+                {
+                case 0:
+                    arguments->BASE_HOST = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                    strcpy(arguments->BASE_HOST, argv[currArg]);
+                    break;
+                case 1:
+                    arguments->DST_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                    strcpy(arguments->DST_FILEPATH, argv[currArg]);
+                    break;
+                case 2:
+                    arguments->SRC_FILEPATH = malloc(strlen(argv[currArg]) * sizeof(char) + 1);
+                    strcpy(arguments->SRC_FILEPATH, argv[currArg]);
+                    break;
+                default:
+                    break;
+                }
+                baseArgCount++;
+            }
         }
-    }
 }
 
 int main(int argc, char *argv[])
 {
-
     struct args *arguments = malloc(sizeof(struct args));
     fillArguments(arguments, argc, argv);
-    printf("args - %s, %s, %s, %s\n", arguments->UPSTREAM_DNS_IP, arguments->BASE_HOST, arguments->DST_FILEPATH, arguments->SRC_FILEPATH);
     int sockfd;
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
@@ -250,22 +246,37 @@ int main(int argc, char *argv[])
 
     memset(namePacketPointer, 0, sizeof(namePacket));
 
-    packetFromData(arguments->BASE_HOST, (uint8_t *)arguments->DST_FILEPATH, &namePacketPointer, NAME_PACKET_ID, strlen(arguments->DST_FILEPATH));
+    packetFromData(arguments->BASE_HOST, (uint8_t *)arguments->DST_FILEPATH, &namePacketPointer, NAME_PACKET_ID, strlen(arguments->DST_FILEPATH), arguments->DST_FILEPATH);
     size_t packetSize = namePacketPointer - namePacket;
 
     uint8_t response[1024];
     socklen_t socklen = sizeof(struct sockaddr_in);
 
+    // ASSIGNMEN FUNCTION
+    dns_sender__on_chunk_sent(&servaddr.sin_addr, arguments->DST_FILEPATH, NAME_PACKET_ID, packetSize);
+
     sendto(sockfd, namePacket, packetSize,
            MSG_CONFIRM, (const struct sockaddr *)&servaddr,
            sizeof(servaddr));
     // END TODO
+    int waitInWhile = 0;
+    recvfrom(sockfd, response, sizeof(response), MSG_WAITALL,
+             (struct sockaddr *)&servaddr, &socklen);
 
+    // ASSIGNMEN FUNCTION
+    dns_sender__on_transfer_init(&servaddr.sin_addr);
+    int fileSize = 0;
     while (!eof)
     {
-
-        recvfrom(sockfd, response, sizeof(response), MSG_WAITALL,
-                 (struct sockaddr *)&servaddr, &socklen);
+        if (waitInWhile)
+        {
+            recvfrom(sockfd, response, sizeof(response), MSG_WAITALL,
+                     (struct sockaddr *)&servaddr, &socklen);
+        }
+        else
+        {
+            waitInWhile = 1;
+        }
 
         uint8_t packet[514]; // packet should have maximally 512 Bytes
         uint8_t *packetPointer = packet;
@@ -273,17 +284,23 @@ int main(int argc, char *argv[])
         memset(packetPointer, 0, sizeof(packet));
         memset(rawDataToSend, 0, maxQNameSize + 1);
         int bytesRead = fread(rawDataToSend, 1, maxQNameSize, fp);
+
         if (bytesRead <= 0)
             break;
-        packetFromData(arguments->BASE_HOST, rawDataToSend, &packetPointer, packetCounter, bytesRead);
+
+        fileSize += bytesRead;
+
+        packetFromData(arguments->BASE_HOST, rawDataToSend, &packetPointer, packetCounter, bytesRead, arguments->DST_FILEPATH);
 
         packetSize = packetPointer - packet;
+
+        // ASSIGNMEN FUNCTION
+        dns_sender__on_chunk_sent(&servaddr.sin_addr, arguments->DST_FILEPATH, packetCounter, packetSize);
 
         sendto(sockfd, packet, packetSize,
                MSG_CONFIRM, (const struct sockaddr *)&servaddr,
                sizeof(servaddr));
         packetCounter++;
-        printf("%s\n", rawDataToSend);
     }
     fclose(fp);
 
@@ -293,13 +310,18 @@ int main(int argc, char *argv[])
     char *dummyEndCall = "neplecha ukoncena";
     memset(endPacketPointer, 0, sizeof(endPacket));
 
-    packetFromData(arguments->BASE_HOST, (uint8_t *)dummyEndCall, &endPacketPointer, END_PACKET_ID, strlen(dummyEndCall));
+    packetFromData(arguments->BASE_HOST, (uint8_t *)dummyEndCall, &endPacketPointer, END_PACKET_ID, strlen(dummyEndCall), arguments->DST_FILEPATH);
     packetSize = endPacketPointer - endPacket;
+
+    // ASSIGNMEN FUNCTION
+    dns_sender__on_chunk_sent(&servaddr.sin_addr, arguments->DST_FILEPATH, END_PACKET_ID, packetSize);
+
     sendto(sockfd, endPacket, packetSize,
            MSG_CONFIRM, (const struct sockaddr *)&servaddr,
            sizeof(servaddr));
     // END TODO
 
-    printf("Done sending.\n");
+    // ASSIGNMEN FUNCTION
+    dns_sender__on_transfer_completed(arguments->DST_FILEPATH, fileSize);
     return 1;
 };

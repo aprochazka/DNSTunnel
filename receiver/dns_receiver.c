@@ -12,8 +12,10 @@
 #include "receiver.h"
 #include "sys/stat.h"
 #include "errno.h"
+#include "dns_receiver_events.h"
 
 #define PATH_MAX 255
+#define DATA_CHUNK_ID 2
 
 int mkdir_p(const char *pathname)
 {
@@ -207,6 +209,7 @@ int recognizePacket(char *packet, char *baseHost)
 	char *hostFromPacket = malloc((strlen(baseHost) + 2) * sizeof(char));
 	transformBaseHost(baseHost, &transformedBaseHost);
 	strncpy(hostFromPacket, &packet[strlen(packet) - strlen(transformedBaseHost)], strlen(transformedBaseHost));
+	hostFromPacket[strlen(transformedBaseHost)] = (char)0;
 	return strcmp(transformedBaseHost, hostFromPacket);
 }
 
@@ -259,7 +262,6 @@ int main(int argc, char *argv[])
 	}
 
 	int fd;
-	char receivedData[1000];
 
 	struct sockaddr_in server;
 	struct sockaddr_in client;
@@ -277,11 +279,14 @@ int main(int argc, char *argv[])
 
 	length = sizeof(client);
 
+	char receivedData[1000];
+	char *receivedDataPointer = receivedData;
+	receivedDataPointer += sizeof(struct dnsHeader);
 	int n;
-	while ((n = recvfrom(fd, receivedData, 1000, 0, (struct sockaddr *)&client, &length)) >= 0)
+
+	while ((n = recvfrom(fd, receivedData, 1000, MSG_WAITALL, (struct sockaddr *)&client, &length)) >= 0)
 	{
-		char *receivedDataPointer = receivedData;
-		receivedDataPointer += sizeof(struct dnsHeader);
+
 		uint64_t packetIndex = 1;
 		if (recognizePacket(receivedDataPointer, arguments->BASE_HOST) != 0)
 		{
@@ -314,12 +319,16 @@ int main(int argc, char *argv[])
 		}
 		// OPEN FILE END
 
+		dns_receiver__on_transfer_init(&client.sin_addr);
+
 		prepareResponse(receivedDataPointer, packetIndex);
 		packetIndex++;
 		sendto(fd, receivedData, n, 0, (struct sockaddr *)&client,
 			   sizeof(client));
 
-		while ((n = recvfrom(fd, receivedData, 1000, 0, (struct sockaddr *)&client, &length)) >= 0)
+		int chunkId = DATA_CHUNK_ID;
+		int fileSize = 0;
+		while ((n = recvfrom(fd, receivedData, 1000, MSG_WAITALL, (struct sockaddr *)&client, &length)) >= 0)
 		{
 			if (recognizePacket(receivedDataPointer, arguments->BASE_HOST) != 0)
 			{
@@ -328,12 +337,25 @@ int main(int argc, char *argv[])
 
 			if (isPacketStartEnd(receivedDataPointer) == -1)
 				break;
+
+			// ASSIGNMENT FUNCTION
+			dns_receiver__on_chunk_received(&client.sin_addr, pathToFile, chunkId, strlen(receivedDataPointer));
+
 			char *encodedBuffer = malloc(MAX_DATA_SIZE + 2);
 			int dataLen = getChunks(receivedDataPointer, encodedBuffer);
+
+			// ASSIGNMENT FUNCTION
+			dns_receiver__on_query_parsed(pathToFile, encodedBuffer);
+
 			unsigned char *decoded;
 			hexs2bin(encodedBuffer, &decoded);
-			fwrite(decoded, 1, dataLen / 2 - 5, fp);
 
+			int chunkSize = dataLen / 2 - 5;
+
+			chunkId++;
+
+			fwrite(decoded, 1, chunkSize, fp);
+			fileSize += chunkSize;
 			prepareResponse(receivedDataPointer, packetIndex);
 			packetIndex++;
 			sendto(fd, receivedData, n, 0, (struct sockaddr *)&client,
@@ -341,6 +363,8 @@ int main(int argc, char *argv[])
 		}
 
 		fclose(fp);
+		dns_receiver__on_transfer_completed(pathToFile, fileSize);
+		memset(receivedData, (char)0, 1000);
 	}
 
 	return 1;
