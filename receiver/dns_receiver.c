@@ -252,6 +252,27 @@ int parseArguments(struct args *arguments, int argc, char *argv[])
 	return 1;
 }
 
+int baseHostIndex(char *src, char *baseHost)
+{
+	int i = strlen(src);
+	int k = strlen(baseHost);
+	while (i > 0)
+	{
+		i--;
+		k--;
+		if (src[i] != baseHost[k])
+		{
+			if (baseHost[k] == '.')
+			{
+				k--;
+				continue;
+			}
+			return i;
+		}
+	}
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	struct args *arguments = malloc(sizeof(struct args));
@@ -297,18 +318,26 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		unsigned char *fileName;
+		char *fileName = malloc(MAX_DATA_SIZE);
 		char *nameEncodedBuffer = malloc(MAX_DATA_SIZE + 2);
-		getChunks(receivedDataPointer, nameEncodedBuffer);
-		hexs2bin(nameEncodedBuffer, &fileName);
+		memset(fileName, 0, MAX_DATA_SIZE);
+		memset(nameEncodedBuffer, 0, MAX_DATA_SIZE + 2);
+		int fileNameLen = getChunks(receivedDataPointer, nameEncodedBuffer);
+		printf("%s\n", nameEncodedBuffer);
+		hexs2bin(nameEncodedBuffer, (unsigned char **)&fileName);
+		fileName[(baseHostIndex(nameEncodedBuffer, arguments->BASE_HOST) + 1) / 2] = '\0';
+		printf("%d\n", fileNameLen);
+		printf("%s\n", fileName);
+		printf("%d\n", baseHostIndex(nameEncodedBuffer, arguments->BASE_HOST));
 
 		//
 		// OPEN FILE
 		//
-		char *pathToFile = malloc(strlen(arguments->DST_FILEPATH) + strlen((char *)fileName));
+		char *pathToFile = malloc(strlen(arguments->DST_FILEPATH) + fileNameLen + 4);
 		strcpy(pathToFile, arguments->DST_FILEPATH);
 		strcat(pathToFile, "/");
 		strcat(pathToFile, (char *)fileName);
+		printf("1\n");
 
 		mkdir_p(pathToFile);
 		FILE *fp = fopen((char *)pathToFile, "w+");
@@ -328,6 +357,7 @@ int main(int argc, char *argv[])
 
 		int chunkId = DATA_CHUNK_ID;
 		int fileSize = 0;
+		memset(receivedData, (char)0, 1000);
 		while ((n = recvfrom(fd, receivedData, 1000, MSG_WAITALL, (struct sockaddr *)&client, &length)) >= 0)
 		{
 			if (recognizePacket(receivedDataPointer, arguments->BASE_HOST) != 0)
@@ -360,6 +390,7 @@ int main(int argc, char *argv[])
 			packetIndex++;
 			sendto(fd, receivedData, n, 0, (struct sockaddr *)&client,
 				   sizeof(client));
+			memset(receivedData, (char)0, 1000);
 		}
 
 		fclose(fp);
